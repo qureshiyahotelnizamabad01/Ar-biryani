@@ -1,68 +1,159 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Biryani AR — Start Camera</title>
 
   <script type="module"
-    src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js">
-  </script>
-
-  <title>Biryani AR</title>
+    src="https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js"></script>
 
   <style>
-    body {
-      margin: 0;
-      background: #000;
-      font-family: Arial, sans-serif;
-    }
+    :root { --btn-bg: #e53935; --btn-color: #fff; }
+    html,body { height:100%; margin:0; font-family:system-ui,Arial; background:#000; }
+    model-viewer { width:100vw; height:100vh; display:block; }
 
-    .hint {
-      position: fixed;
-      top: 10px;
-      width: 100%;
-      text-align: center;
-      color: #fff;
-      font-size: 14px;
-      z-index: 10;
-      opacity: 0.8;
+    /* Large full-screen CTA overlay until user taps */
+    #overlay {
+      position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+      background:linear-gradient( rgba(0,0,0,0.45), rgba(0,0,0,0.45) );
+      z-index:30;
+      flex-direction:column;
+      gap:16px;
+      padding:24px;
+      box-sizing:border-box;
+      text-align:center;
+      color:white;
     }
+    #startBtn {
+      background:var(--btn-bg);
+      color:var(--btn-color);
+      border:none;
+      padding:14px 22px;
+      border-radius:12px;
+      font-size:18px;
+      font-weight:600;
+      box-shadow:0 8px 24px rgba(0,0,0,0.4);
+      display:inline-flex; gap:10px; align-items:center;
+    }
+    #hint { font-size:14px; opacity:0.95; max-width:640px; }
+    #small { font-size:12px; opacity:0.8; margin-top:6px; }
   </style>
 </head>
-
 <body>
 
-<div class="hint">Tap the button below to open camera</div>
-
-<model-viewer
+<!-- model-viewer (AR-enabled) -->
+<model-viewer id="mv"
   src="textured.glb"
+  alt="Biryani 3D model"
   ar
   ar-modes="webxr scene-viewer quick-look"
   ar-placement="floor"
   camera-controls
   interaction-prompt="none"
-  style="width:100vw; height:100vh;">
-
-  <!-- CUSTOM AR BUTTON -->
-  <button slot="ar-button"
-    style="
-      position:absolute;
-      bottom:20px;
-      left:50%;
-      transform:translateX(-50%);
-      padding:16px 24px;
-      font-size:18px;
-      font-weight:bold;
-      border-radius:12px;
-      border:none;
-      background:#e53935;
-      color:white;
-      box-shadow:0 6px 20px rgba(0,0,0,0.4);
-    ">
-    📸 Start AR (Open Camera)
-  </button>
-
+  style="background:#000;">
+  <!-- fallback content if not supported -->
+  <div slot="poster" style="color:#fff; padding:16px;">3D preview</div>
 </model-viewer>
+
+<!-- Overlay to force a single clear user gesture -->
+<div id="overlay" role="dialog" aria-label="Start AR">
+  <div id="hint"><strong>View this item in AR</strong><div id="small">Tap the button below to allow camera access and place the 3D model in your real world.</div></div>
+  <button id="startBtn" aria-label="Start AR">📸 Start AR (Open Camera)</button>
+  <div id="status" style="margin-top:8px;font-size:13px;opacity:0.9"></div>
+</div>
+
+<script>
+(async function(){
+  const overlay = document.getElementById('overlay');
+  const btn = document.getElementById('startBtn');
+  const status = document.getElementById('status');
+  const mv = document.getElementById('mv');
+
+  function setStatus(text){
+    status.textContent = text;
+  }
+
+  // helper: request camera permission by actually calling getUserMedia
+  async function requestCameraPermission(){
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('getUserMedia not available in this browser.');
+    }
+
+    // Prefer back camera if available
+    const constraints = { video: { facingMode: { exact: "environment" } } };
+
+    try {
+      // try exact environment constraint first (may fail on some devices)
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      // immediately stop tracks (we only needed the permission prompt)
+      stream.getTracks().forEach(t => t.stop());
+      return true;
+    } catch (err) {
+      // fallback to any camera (some devices don't honor exact).
+      const fallback = { video: true };
+      const stream = await navigator.mediaDevices.getUserMedia(fallback);
+      stream.getTracks().forEach(t => t.stop());
+      return true;
+    }
+  }
+
+  async function startARFlow(){
+    try {
+      setStatus('Requesting camera permission…');
+      await requestCameraPermission();               // <-- will trigger permission popup on first tap
+      setStatus('Permission granted. Starting AR…');
+
+      // Wait tiny bit for browser to settle
+      await new Promise(r => setTimeout(r, 250));
+
+      // Try to start model-viewer AR session.
+      // Preferred method: call enterAR() (returns a Promise if available).
+      if (mv && typeof mv.enterAR === 'function') {
+        try {
+          await mv.enterAR();
+        } catch (enterErr) {
+          // if enterAR fails, fallback to click on the built-in AR button
+          setStatus('AR start failed via API; trying fallback.');
+          // dispatch a click event on the AR button slot (if present)
+          const arButton = mv.shadowRoot && mv.shadowRoot.querySelector('[slot="ar-button"], .ar-button, model-viewer-ar-button');
+          if (arButton) {
+            arButton.click();
+          } else {
+            // as a last resort, remove overlay (user can use built-in AR UI)
+            overlay.style.display = 'none';
+          }
+        }
+      } else {
+        // no enterAR API — just hide overlay and let user use the in-scene AR control
+        overlay.style.display = 'none';
+      }
+
+      // hide overlay once AR is active or user can proceed
+      overlay.style.display = 'none';
+    } catch (err) {
+      console.error(err);
+      setStatus('Camera permission denied or unavailable.\nOpen this page in Chrome (not an in-app browser) and allow the camera.');
+      // keep overlay so user can retry
+    }
+  }
+
+  // Single tap handler
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.style.opacity = 0.8;
+    setStatus('Please choose Allow when prompted by the browser.');
+    await startARFlow();
+    btn.disabled = false;
+    btn.style.opacity = 1;
+  });
+
+  // If the device can't do getUserMedia, let overlay show a helpful message
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    setStatus('This browser does not support camera access via getUserMedia. Use Chrome on Android or Safari on iPhone.');
+  }
+})();
+</script>
 
 </body>
 </html>
